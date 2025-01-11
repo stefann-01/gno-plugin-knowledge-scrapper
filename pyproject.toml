@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "gno-plugin-knowledge-scrapper"
+version = "0.1.0"
+description = "Tools for extracting content from documents and websites"
+authors = ["stefann-01 <st.nikolic01@gmail.com>"]
+package-mode = true
+
+[tool.poetry.dependencies]
+python = "^3.8"
+beautifulsoup4 = "^4.12.3"
+playwright = "^1.42.0"
+argparse = "^1.4.0"
+requests = "^2.31.0"
+python-dotenv = "^1.0.0"
+
+[tool.poetry.scripts]
+crawl = "gno_plugin_knowledge_scrapper.gbe_crawler:main"
+extract = "gno_plugin_knowledge_scrapper.docs_extractor:main"
+format = "gno_plugin_knowledge_scrapper.gbe_formatter:main"
+html = "gno_plugin_knowledge_scrapper.gbe_html_extractor:main"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
