@@ -24,28 +24,50 @@ class GBECrawler:
         """
         code_blocks = []
         
-        # Get all code tabs
-        tabs = page.query_selector_all("button[role='tab'] p")
-        for tab in tabs:
-            filename = tab.inner_text()
-            if not filename.endswith('.gno'):
-                continue
-                
-            # Find the associated code content
-            # Using JavaScript to extract the exact text content from Monaco editor
-            code_content = page.evaluate("""
-                () => {
-                    const lines = document.querySelectorAll('.view-line');
-                    return Array.from(lines).map(line => {
-                        // Get text content without line numbers
-                        return line.textContent.trim();
-                    }).join('\\n');
-                }
-            """)
-            
-            if code_content:
-                code_blocks.append((filename, code_content))
+        print("\nExtracting code blocks...")
         
+        # Wait for Monaco editor to be present and inject helper function
+        page.wait_for_selector('.monaco-editor', state='attached', timeout=5000)
+        
+        # Inject helper function to get editor content
+        page.evaluate("""
+            window.getEditorContent = () => {
+                const editors = monaco.editor.getEditors();
+                return editors.map(editor => editor.getValue());
+            }
+        """)
+        
+        # Get all code tabs
+        tabs = page.query_selector_all('[role="tab"]')
+        filenames = []
+        
+        # First collect all filenames in order
+        for tab in tabs:
+            filename_elem = tab.query_selector("p")
+            if filename_elem:
+                filename = filename_elem.inner_text()
+                filenames.append(filename)
+        
+        print(f"Found {len(filenames)} files")
+        
+        # Get content from all editors at once
+        try:
+            contents = page.evaluate("getEditorContent()")
+            print(f"Got {len(contents)} editor contents")
+            
+            # Match filenames with contents
+            for filename, content in zip(filenames, contents):
+                if content and content.strip():
+                    lines = content.splitlines()
+                    print(f"✓ Extracted {len(lines)} lines from {filename}")
+                    print(f"First few lines: {lines[:2]}")
+                    code_blocks.append((filename, content))
+                else:
+                    print(f"✗ No code content found for {filename}")
+        except Exception as e:
+            print(f"Error getting editor contents: {str(e)}")
+        
+        print(f"\nTotal code blocks extracted: {len(code_blocks)}")
         return code_blocks
 
     def extract_page_content(self, page) -> Dict:
@@ -56,22 +78,137 @@ class GBECrawler:
         title_elem = page.query_selector("b.chakra-text")
         title = title_elem.inner_text() if title_elem else "Untitled"
         
-        # Get the description/explanation text
-        description = []
-        text_elements = page.query_selector_all("p.chakra-text")
-        for elem in text_elements:
-            text = elem.inner_text()
-            if text and text != title:
-                description.append(text)
+        # Get all text and code blocks in order
+        content_blocks = []
         
-        # Get code blocks
-        code_blocks = self.extract_code_blocks(page)
+        # Footer lines to exclude (both exact and partial matches)
+        footer_exact = {
+            "Gno by Example is a community project.",
+            "Check out the GitHub repo.",
+            "Learn more about Gno.land and",
+            "be part of the conversation:",
+            "Check out the full example here."
+        }
+        footer_partial = [
+            "Check out the full example",
+            "Gno by Example",
+            "Check out the GitHub",
+            "Learn more about Gno"
+        ]
+        
+        # Get all content elements in order
+        elements = page.query_selector_all("p.chakra-text, [role='tab']")
+        current_text = []
+        
+        # Keep track of filenames to skip them in text
+        filenames = set()
+        
+        # First collect all filenames
+        for elem in elements:
+            if elem.get_attribute('role') == 'tab':
+                filename = elem.query_selector("p").inner_text()
+                filenames.add(filename)
+        
+        # Now process elements
+        for elem in elements:
+            if elem.get_attribute('role') == 'tab':
+                # If we have accumulated text, add it as a block
+                if current_text:
+                    # Filter out lines that are just filenames
+                    filtered_text = [line for line in current_text if line not in filenames]
+                    if filtered_text:
+                        content_blocks.append(('text', '\n'.join(filtered_text)))
+                    current_text = []
+                # Add the code block marker
+                filename = elem.query_selector("p").inner_text()
+                content_blocks.append(('code', filename))
+            else:
+                # Get text with links preserved
+                text = self.extract_text_with_links(elem)
+                if not text:
+                    continue
+                    
+                # Skip empty, title, and footer lines
+                if text == title or text in footer_exact:
+                    continue
+                # Skip lines containing footer content
+                if any(footer in text for footer in footer_partial):
+                    continue
+                current_text.append(text)
+        
+        # Add any remaining text
+        if current_text:
+            # Filter out lines that are just filenames
+            filtered_text = [line for line in current_text if line not in filenames]
+            if filtered_text:
+                content_blocks.append(('text', '\n'.join(filtered_text)))
+        
+        # Get code contents
+        code_contents = {}
+        try:
+            # Wait for Monaco editor to be present and inject helper function
+            page.wait_for_selector('.monaco-editor', state='attached', timeout=5000)
+            
+            # Inject helper function to get editor content
+            page.evaluate("""
+                window.getEditorContent = () => {
+                    const editors = monaco.editor.getEditors();
+                    return editors.map(editor => editor.getValue());
+                }
+            """)
+            
+            # Get all code tabs for filenames
+            tabs = page.query_selector_all('[role="tab"]')
+            filenames = []
+            for tab in tabs:
+                filename_elem = tab.query_selector("p")
+                if filename_elem:
+                    filenames.append(filename_elem.inner_text())
+            
+            # Get content from all editors at once
+            contents = page.evaluate("getEditorContent()")
+            
+            # Match filenames with contents
+            for filename, content in zip(filenames, contents):
+                if content and content.strip():
+                    code_contents[filename] = content.strip()
+        except Exception as e:
+            print(f"Error getting editor contents: {str(e)}")
         
         return {
             "title": title,
-            "description": "\n".join(description),
-            "code_blocks": code_blocks
+            "content_blocks": content_blocks,
+            "code_contents": code_contents
         }
+        
+    def extract_text_with_links(self, elem) -> str:
+        """Extract text content preserving links in markdown format"""
+        # First check if the element itself is empty
+        text = elem.inner_text().strip()
+        if not text:
+            return ""
+            
+        # Get all links in the element
+        links = elem.query_selector_all("a")
+        if not links:
+            return text
+            
+        # Get the HTML content to preserve link positions
+        html = elem.inner_html()
+        
+        # For each link, replace it with markdown format
+        for link in links:
+            link_text = link.inner_text()
+            href = link.get_attribute("href")
+            if href and link_text:
+                # Create markdown link
+                markdown_link = f"[{link_text}]({href})"
+                # Replace in HTML (using a unique placeholder to avoid nested replacements)
+                html = html.replace(str(link.evaluate("node => node.outerHTML")), markdown_link)
+        
+        # Convert any remaining HTML to plain text (remove tags)
+        text = BeautifulSoup(html, 'html.parser').get_text()
+        return text.strip()
 
     def get_navigation_urls(self, page) -> List[str]:
         """Extract URLs in the order they appear in navigation"""
@@ -110,7 +247,7 @@ class GBECrawler:
                     
                     # Extract content
                     content = self.extract_page_content(page)
-                    if content["code_blocks"]:  # Only store pages with code
+                    if content["code_contents"]:  # Only store pages with code
                         self.text_content[url] = content
                         ordered_urls.append(url)
                     
@@ -164,15 +301,17 @@ def main():
                 f.write(f"URL: {url}\n")
                 f.write("-" * 80 + "\n\n")
                 
-                # Write description
-                f.write(page_content['description'] + "\n\n")
-                
-                # Write code blocks
-                for filename, code in page_content['code_blocks']:
-                    f.write(f"File: {filename}\n")
-                    f.write("```\n")
-                    f.write(format_code_block(code) + "\n")
-                    f.write("```\n\n")
+                # Write content blocks in order
+                for block_type, block_content in page_content['content_blocks']:
+                    if block_type == 'text':
+                        f.write(block_content + "\n\n")
+                    else:  # code block
+                        filename = block_content
+                        if filename in page_content['code_contents']:
+                            f.write(f"File: {filename}\n")
+                            f.write("```\n")
+                            f.write(format_code_block(page_content['code_contents'][filename]) + "\n")
+                            f.write("```\n\n")
                 
                 f.write("-" * 80 + "\n\n")
         
