@@ -49,12 +49,6 @@ Run any of the following commands using Poetry:
 # Extract Gno by Example content
 poetry run crawl
 
-# Extract HTML content from Gno by Example
-poetry run html
-
-# Format extracted content
-poetry run format
-
 # Extract official documentation
 poetry run extract
 ```
