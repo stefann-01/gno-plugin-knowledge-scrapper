@@ -170,7 +170,7 @@ def main():
                 # Write code blocks
                 for filename, code in page_content['code_blocks']:
                     f.write(f"File: {filename}\n")
-                    f.write("```go\n")
+                    f.write("```\n")
                     f.write(format_code_block(code) + "\n")
                     f.write("```\n\n")
                 

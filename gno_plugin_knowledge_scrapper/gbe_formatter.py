@@ -11,6 +11,7 @@ def clean_file_content(content: str) -> str:
         "Check out the GitHub repo.",
         "Learn more about Gno.land and",
         "be part of the conversation:",
+        "Check out the full example here.",
     ]
     
     # Split content into lines
