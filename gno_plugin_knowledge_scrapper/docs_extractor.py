@@ -9,6 +9,7 @@ import base64
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 from gno_plugin_knowledge_scrapper import get_artifacts_dir
+from openai import OpenAI
 
 # Load .env file at the start of the file
 load_dotenv()
@@ -95,31 +96,66 @@ def main():
             print("No markdown files found.")
             return
         
-        # Generate output filename
+        # Generate timestamp for the folder
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        output_file = os.path.join(artifacts_dir, f"gno_docs_{timestamp}.txt")
+        output_dir = os.path.join(artifacts_dir, f"gno_docs_{timestamp}")
+        docs_dir = os.path.join(output_dir, "docs")  # Single folder for all docs
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(docs_dir, exist_ok=True)
         
-        # Write results to file
-        with open(output_file, 'w', encoding='utf-8') as f:
+        # Sort files by folder for better organization
+        sorted_files = sorted(md_contents.items(), key=lambda x: (x[1][0], x[0]))
+        
+        # Create index file with keywords
+        index_file = os.path.join(output_dir, "_index.txt")
+        with open(index_file, 'w', encoding='utf-8') as f:
             f.write(f"Found {len(md_contents)} markdown files from Gno documentation\n")
             f.write(f"Source: https://docs.gno.land\n")
+            f.write("-" * 80 + "\n\n")
+            f.write("File Name | Keywords\n")
             f.write("-" * 80 + "\n")
             
-            # Sort files by folder for better organization
-            sorted_files = sorted(md_contents.items(), key=lambda x: (x[1][0], x[0]))
+            # Initialize OpenAI client
+            client = OpenAI()
             
-            current_folder = None
             for file_path, (folder, content) in sorted_files:
-                if folder != current_folder:
-                    f.write(f"\n{'=' * 40} Folder: {folder} {'=' * 40}\n\n")
-                    current_folder = folder
-                
-                f.write(f"File: {file_path}\n")
-                f.write("-" * 80 + "\n")
-                f.write(content + "\n")
-                f.write("-" * 80 + "\n\n")
+                print(f"Analyzing: {file_path}")
+                try:
+                    # Query ChatGPT for keywords
+                    response = client.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {"role": "system", "content": "You are a technical documentation analyzer. Extract exactly 10 relevant keywords or key phrases from the given text, separated by commas. Focus on technical terms, concepts, and important topics."},
+                            {"role": "user", "content": content}
+                        ],
+                        temperature=0.3
+                    )
+                    
+                    # Extract keywords from response
+                    keywords = response.choices[0].message.content.strip()
+                    
+                    # Use the same safe filename format
+                    safe_filename = file_path.replace('/', '_')
+                    
+                    # Write to index using the safe filename
+                    f.write(f"{safe_filename} | {keywords}\n")
+                    
+                    # Write the file with its original path in the content
+                    with open(os.path.join(docs_dir, safe_filename), 'w', encoding='utf-8') as doc_f:
+                        doc_f.write(f"Original path: {folder}/{file_path}\n")
+                        doc_f.write(f"Keywords: {keywords}\n")
+                        doc_f.write("-" * 80 + "\n\n")
+                        doc_f.write(content)
+                    
+                    # Add a small delay to respect rate limits
+                    time.sleep(0.5)
+                    
+                except Exception as e:
+                    print(f"Error processing {file_path}: {str(e)}")
+                    # Write to index without keywords if there's an error
+                    f.write(f"{safe_filename} | Error extracting keywords\n")
         
-        print(f"Content has been written to {output_file}")
+        print(f"Content has been written to {output_dir}")
         print(f"Total files extracted: {len(md_contents)}")
             
     except Exception as e:
